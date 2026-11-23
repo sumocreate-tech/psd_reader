@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>簡易PSDレイヤーエディタ</title>
+  <title>簡易PSDレイヤーエディタ（階層構造対応版）</title>
   <script src="https://unpkg.com/ag-psd/dist/bundle.js"></script>
   <style>
     body {
@@ -41,11 +41,9 @@
     canvas:active {
       cursor: grabbing;
     }
-    /* 画面全体がドロップゾーンであることを示す案内 */
     #welcome-message {
       text-align: center;
       color: #888;
-      pointer-events: none;
     }
     #welcome-message h2 {
       color: #ccc;
@@ -85,7 +83,7 @@
     }
     /* 右側：レイヤーパネル */
     #sidebar {
-      width: 320px;
+      width: 340px;
       background-color: #252526;
       border-left: 1px solid #333;
       display: flex;
@@ -108,21 +106,42 @@
     .layer-item {
       display: flex;
       flex-direction: column;
-      padding: 8px 10px;
-      margin-bottom: 6px;
+      padding: 6px 8px;
+      margin-bottom: 4px;
       background-color: #2d2d30;
       border-radius: 4px;
       border: 1px solid transparent;
       font-size: 13px;
+      user-select: none;
+    }
+    .layer-item.folder {
+      background-color: #262629;
+      border-left: 3px solid #569cd6;
     }
     .layer-item.selected {
       border-color: #007acc;
       background-color: #37373d;
     }
+    .layer-item.dimmed {
+      opacity: 0.5;
+    }
     .layer-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
+    }
+    .folder-toggle {
+      width: 16px;
+      text-align: center;
+      cursor: pointer;
+      color: #aaa;
+      font-size: 10px;
+    }
+    .folder-toggle:hover {
+      color: #fff;
+    }
+    .layer-icon {
+      font-size: 13px;
     }
     .layer-name {
       flex: 1;
@@ -163,6 +182,11 @@
     button:hover {
       background-color: #1177bb;
     }
+    button:disabled {
+      background-color: #3e3e42;
+      color: #777;
+      cursor: not-allowed;
+    }
     button.secondary {
       background-color: #3e3e42;
     }
@@ -173,19 +197,17 @@
 </head>
 <body>
 
-  <!-- ドラッグ中に画面全体に出る表示 -->
   <div id="drop-overlay">ここにPSDファイルをドロップしてください</div>
+  <input type="file" id="file-input" accept=".psd" style="display: none;">
 
   <div id="canvas-container">
     <div id="status-banner"></div>
     
-    <!-- ファイル未選択時の案内メッセージ -->
     <div id="welcome-message">
       <h2>PSDファイルを読み込む</h2>
       <p>この画面のどこにでも、PSDファイルをドラッグ＆ドロップしてください</p>
-      <p style="font-size: 12px; color: #666; margin-top: 15px;">（あるいは下のボタンからファイル選択も可能です）</p>
-      <button class="secondary" style="margin-top: 10px; width: auto; padding: 6px 16px;" onclick="document.getElementById('file-input').click()">ファイルを選ぶ</button>
-      <input type="file" id="file-input" accept=".psd" style="display: none;">
+      <p style="font-size: 12px; color: #666; margin-top: 15px;">（または下のボタンからファイルを選択できます）</p>
+      <button type="button" id="select-file-btn" class="secondary" style="margin-top: 10px; width: auto; padding: 8px 20px;">ファイルを選ぶ</button>
     </div>
 
     <canvas id="main-canvas"></canvas>
@@ -193,7 +215,7 @@
 
   <div id="sidebar">
     <div class="panel-header">
-      <span>レイヤー一覧</span>
+      <span>レイヤー構造</span>
       <span id="doc-size" style="font-weight: normal; font-size: 11px; color: #aaa;"></span>
     </div>
     <div id="layer-list">
@@ -202,21 +224,20 @@
       </div>
     </div>
     <div class="footer-actions">
-      <button class="secondary" onclick="location.reload();">リセット</button>
-      <button id="export-btn" disabled>PNG保存</button>
+      <button type="button" id="change-file-btn" class="secondary">別ファイル</button>
+      <button type="button" id="export-btn" disabled>PNG保存</button>
     </div>
   </div>
 
   <script>
     let psdData = null;
-    let flatLayers = [];
-    let selectedLayerIndex = -1;
+    let layerTree = [];      // 階層構造を保持するツリーデータ
+    let selectedNode = null; // 選択中のノード（レイヤーまたはフォルダ）
 
     let isDraggingLayer = false;
     let dragStartX = 0;
     let dragStartY = 0;
-    let initialLayerLeft = 0;
-    let initialLayerTop = 0;
+    let dragTargets = [];    // ドラッグ時に動かすレイヤー群（フォルダ選択時は配下すべて）
 
     const canvas = document.getElementById('main-canvas');
     const ctx = canvas.getContext('2d');
@@ -227,12 +248,31 @@
     const welcomeMessage = document.getElementById('welcome-message');
     const dropOverlay = document.getElementById('drop-overlay');
     const fileInput = document.getElementById('file-input');
+    const selectFileBtn = document.getElementById('select-file-btn');
+    const changeFileBtn = document.getElementById('change-file-btn');
 
     function showBanner(msg, isWarning = false) {
       statusBanner.textContent = msg;
       statusBanner.style.background = isWarning ? 'rgba(200, 140, 20, 0.95)' : 'rgba(200, 60, 60, 0.95)';
       statusBanner.style.display = 'block';
     }
+
+    // --- ボタンからのファイル選択イベント ---
+    selectFileBtn.addEventListener('click', () => {
+      fileInput.value = ''; // 同じファイルを再選択できるようにリセット
+      fileInput.click();
+    });
+
+    changeFileBtn.addEventListener('click', () => {
+      fileInput.value = '';
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        loadPsdFile(e.target.files[0]);
+      }
+    });
 
     // --- 画面全体のドラッグ＆ドロップ制御 ---
     let dragCounter = 0;
@@ -253,7 +293,7 @@
     });
 
     window.addEventListener('dragover', (e) => {
-      e.preventDefault(); // ブラウザが勝手にファイルを開くのを阻止
+      e.preventDefault();
     });
 
     window.addEventListener('drop', (e) => {
@@ -266,11 +306,6 @@
       }
     });
 
-    // ファイル選択ボタンからの読み込み
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) loadPsdFile(e.target.files[0]);
-    });
-
     // --- PSD読み込みメイン処理 ---
     async function loadPsdFile(file) {
       statusBanner.style.display = 'none';
@@ -278,30 +313,33 @@
         const buffer = await file.arrayBuffer();
         psdData = agPsd.readPsd(buffer);
 
-        console.log("PSD読み込み成功:", psdData);
-
         canvas.width = psdData.width;
         canvas.height = psdData.height;
         docSizeEl.textContent = `${psdData.width} × ${psdData.height}px`;
 
-        flatLayers = [];
-        extractLayers(psdData.children || [], 0);
+        // 階層構造（ツリー）を構築
+        layerTree = buildLayerTree(psdData.children || []);
 
-        // レイヤー画像が取れず統合プレビューがある場合のフォールバック
-        if (flatLayers.length === 0 && psdData.canvas) {
-          flatLayers.push({
+        // レイヤーが空で統合プレビューがある場合
+        if (layerTree.length === 0 && psdData.canvas) {
+          layerTree.push({
+            type: 'layer',
             name: '統合済みプレビュー画像',
             canvas: psdData.canvas,
-            left: 0, top: 0, opacity: 1, visible: true, blendMode: 'source-over', depth: 0
+            left: 0,
+            top: 0,
+            opacity: 1,
+            visible: true,
+            blendMode: 'source-over'
           });
-          showBanner('個別レイヤーの画像データが見つからないため、統合プレビューを表示しています', true);
+          showBanner('個別レイヤーが見つからないため、統合プレビューを表示しています', true);
         }
 
         welcomeMessage.style.display = 'none';
         canvas.style.display = 'block';
         exportBtn.disabled = false;
+        selectedNode = null;
 
-        selectedLayerIndex = flatLayers.length > 0 ? flatLayers.length - 1 : -1;
         renderLayerUI();
         renderCanvas();
 
@@ -311,24 +349,35 @@
       }
     }
 
-    function extractLayers(children, depth, parentHidden = false) {
+    // 再帰的にフォルダとレイヤーのツリー構造を作成
+    function buildLayerTree(children) {
+      const nodes = [];
       for (const child of children) {
-        const isHidden = parentHidden || Boolean(child.hidden);
         if (child.children) {
-          extractLayers(child.children, depth + 1, isHidden);
+          // フォルダ（グループ）ノード
+          nodes.push({
+            type: 'folder',
+            name: child.name || '名称未設定フォルダ',
+            visible: !Boolean(child.hidden),
+            opacity: child.opacity !== undefined ? child.opacity : 1,
+            collapsed: false, // 折りたたみ状態
+            children: buildLayerTree(child.children)
+          });
         } else if (child.canvas) {
-          flatLayers.push({
+          // 通常レイヤーノード
+          nodes.push({
+            type: 'layer',
             name: child.name || '名称未設定レイヤー',
             canvas: child.canvas,
             left: child.left || 0,
             top: child.top || 0,
             opacity: child.opacity !== undefined ? child.opacity : 1,
-            visible: !isHidden,
-            blendMode: mapBlendMode(child.blendMode),
-            depth: depth
+            visible: !Boolean(child.hidden),
+            blendMode: mapBlendMode(child.blendMode)
           });
         }
       }
+      return nodes;
     }
 
     function mapBlendMode(psdMode) {
@@ -349,72 +398,122 @@
       return map[psdMode] || 'source-over';
     }
 
+    // --- キャンバスの再描画（ツリーを下から順に走査） ---
     function renderCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      for (let i = 0; i < flatLayers.length; i++) {
-        const layer = flatLayers[i];
-        if (!layer.visible || layer.opacity <= 0) continue;
+      drawNodes(layerTree, true, 1);
+    }
 
-        ctx.save();
-        ctx.globalAlpha = layer.opacity;
-        ctx.globalCompositeOperation = layer.blendMode;
-        ctx.drawImage(layer.canvas, layer.left, layer.top);
-        ctx.restore();
+    function drawNodes(nodes, parentVisible, parentOpacity) {
+      // ag-psdの配列は「下のレイヤーから上のレイヤー」の順で格納されている
+      for (const node of nodes) {
+        const currentVisible = parentVisible && node.visible;
+        const currentOpacity = parentOpacity * node.opacity;
+
+        if (!currentVisible || currentOpacity <= 0) continue;
+
+        if (node.type === 'folder') {
+          drawNodes(node.children, currentVisible, currentOpacity);
+        } else if (node.type === 'layer' && node.canvas) {
+          ctx.save();
+          ctx.globalAlpha = currentOpacity;
+          ctx.globalCompositeOperation = node.blendMode;
+          ctx.drawImage(node.canvas, node.left, node.top);
+          ctx.restore();
+        }
       }
     }
 
+    // --- 右側レイヤーパネルのツリーUI描画 ---
     function renderLayerUI() {
       layerListEl.innerHTML = '';
-      if (flatLayers.length === 0) {
+      if (layerTree.length === 0) {
         layerListEl.innerHTML = '<div style="color: #888; text-align: center; margin-top: 40px; font-size: 13px;">表示できるレイヤーがありません</div>';
         return;
       }
+      appendTreeNodes(layerTree, 0, true);
+    }
 
-      for (let i = flatLayers.length - 1; i >= 0; i--) {
-        const layer = flatLayers[i];
+    function appendTreeNodes(nodes, depth, parentVisible) {
+      // UI上は「上のレイヤーが上」に来るように逆順でループ
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const node = nodes[i];
+        const isEffectiveVisible = parentVisible && node.visible;
+
         const item = document.createElement('div');
-        item.className = 'layer-item' + (i === selectedLayerIndex ? ' selected' : '');
+        item.className = 'layer-item' +
+          (node.type === 'folder' ? ' folder' : '') +
+          (node === selectedNode ? ' selected' : '') +
+          (!isEffectiveVisible ? ' dimmed' : '');
+        item.style.marginLeft = `${depth * 14}px`;
 
         const row = document.createElement('div');
         row.className = 'layer-row';
 
+        // フォルダの場合は開閉ボタン（▼ / ▶）を追加
+        if (node.type === 'folder') {
+          const toggle = document.createElement('span');
+          toggle.className = 'folder-toggle';
+          toggle.textContent = node.collapsed ? '▶' : '▼';
+          toggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            node.collapsed = !node.collapsed;
+            renderLayerUI();
+          });
+          row.appendChild(toggle);
+        } else {
+          const spacer = document.createElement('span');
+          spacer.style.width = '16px';
+          row.appendChild(spacer);
+        }
+
+        // 表示・非表示チェックボックス
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.checked = layer.visible;
+        checkbox.checked = node.visible;
         checkbox.addEventListener('change', (e) => {
-          layer.visible = e.target.checked;
+          node.visible = e.target.checked;
+          renderLayerUI();
           renderCanvas();
         });
+        row.appendChild(checkbox);
 
+        // アイコン
+        const icon = document.createElement('span');
+        icon.className = 'layer-icon';
+        icon.textContent = node.type === 'folder' ? '📁' : '🖼️';
+        row.appendChild(icon);
+
+        // レイヤー／フォルダ名
         const nameSpan = document.createElement('span');
         nameSpan.className = 'layer-name';
-        nameSpan.style.paddingLeft = `${layer.depth * 12}px`;
-        nameSpan.textContent = layer.name;
+        nameSpan.textContent = node.name;
+        nameSpan.title = node.name;
         nameSpan.addEventListener('click', () => {
-          selectedLayerIndex = i;
+          selectedNode = (selectedNode === node) ? null : node;
           renderLayerUI();
         });
-
-        row.appendChild(checkbox);
         row.appendChild(nameSpan);
+
         item.appendChild(row);
 
-        if (i === selectedLayerIndex) {
+        // 選択中の場合、不透明度スライダーを表示（フォルダ全体の不透明度調整にも対応）
+        if (node === selectedNode) {
           const controls = document.createElement('div');
           controls.className = 'layer-controls';
 
           const label = document.createElement('span');
-          label.textContent = `不透明度: ${Math.round(layer.opacity * 100)}%`;
+          label.textContent = `不透明度: ${Math.round(node.opacity * 100)}%`;
 
           const slider = document.createElement('input');
           slider.type = 'range';
           slider.min = 0;
           slider.max = 1;
           slider.step = 0.01;
-          slider.value = layer.opacity;
+          slider.value = node.opacity;
           slider.addEventListener('input', (e) => {
-            layer.opacity = parseFloat(e.target.value);
-            label.textContent = `不透明度: ${Math.round(layer.opacity * 100)}%`;
+            node.opacity = parseFloat(e.target.value);
+            label.textContent = `不透明度: ${Math.round(node.opacity * 100)}%`;
             renderCanvas();
           });
 
@@ -424,39 +523,59 @@
         }
 
         layerListEl.appendChild(item);
+
+        // フォルダが開いている場合は子要素を再帰描画
+        if (node.type === 'folder' && !node.collapsed) {
+          appendTreeNodes(node.children, depth + 1, isEffectiveVisible);
+        }
       }
     }
 
-    // キャンバス上のドラッグで選択中レイヤーを移動
+    // --- ドラッグ移動（フォルダ選択時は配下のレイヤーをまとめて移動） ---
+    function collectMovableLayers(node, list = []) {
+      if (!node) return list;
+      if (node.type === 'layer') {
+        list.push({ layer: node, startLeft: node.left, startTop: node.top });
+      } else if (node.type === 'folder') {
+        for (const child of node.children) {
+          collectMovableLayers(child, list);
+        }
+      }
+      return list;
+    }
+
     canvas.addEventListener('mousedown', (e) => {
-      if (selectedLayerIndex < 0) return;
+      if (!selectedNode) return;
       isDraggingLayer = true;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
       dragStartX = e.clientX * scaleX;
       dragStartY = e.clientY * scaleY;
-      initialLayerLeft = flatLayers[selectedLayerIndex].left;
-      initialLayerTop = flatLayers[selectedLayerIndex].top;
+      dragTargets = collectMovableLayers(selectedNode);
     });
 
     window.addEventListener('mousemove', (e) => {
-      if (!isDraggingLayer || selectedLayerIndex < 0) return;
+      if (!isDraggingLayer || dragTargets.length === 0) return;
       const rectCanvas = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rectCanvas.width;
       const scaleY = canvas.height / rectCanvas.height;
       const dx = (e.clientX * scaleX) - dragStartX;
       const dy = (e.clientY * scaleY) - dragStartY;
 
-      flatLayers[selectedLayerIndex].left = Math.round(initialLayerLeft + dx);
-      flatLayers[selectedLayerIndex].top = Math.round(initialLayerTop + dy);
+      for (const target of dragTargets) {
+        target.layer.left = Math.round(target.startLeft + dx);
+        target.layer.top = Math.round(target.startTop + dy);
+      }
       renderCanvas();
     });
 
     window.addEventListener('mouseup', () => {
       isDraggingLayer = false;
+      dragTargets = [];
     });
 
+    // --- PNG保存 ---
     exportBtn.addEventListener('click', () => {
       const link = document.createElement('a');
       link.download = 'edited-image.png';
