@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>簡易PSDレイヤーエディタ</title>
+  <script src="https://unpkg.com/ag-psd/dist/bundle.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      display: flex;
+      height: 100vh;
+      background-color: #1e1e1e;
+      color: #e0e0e0;
+      overflow: hidden;
+    }
+    /* 左側：キャンバスエリア */
+    #canvas-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background-image: linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
+                        linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+                        linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
+                        linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+      overflow: auto;
+      padding: 20px;
+      position: relative;
+    }
+    canvas {
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      max-width: 100%;
+      max-height: 100%;
+      cursor: grab;
+      display: none;
+    }
+    canvas:active {
+      cursor: grabbing;
+    }
+    /* 画面全体がドロップゾーンであることを示す案内 */
+    #welcome-message {
+      text-align: center;
+      color: #888;
+      pointer-events: none;
+    }
+    #welcome-message h2 {
+      color: #ccc;
+      margin-bottom: 8px;
+    }
+    /* ドラッグされているときに画面全体を光らせるオーバーレイ */
+    #drop-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 120, 212, 0.2);
+      border: 4px dashed #007acc;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: #fff;
+      font-weight: bold;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    #status-banner {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(200, 60, 60, 0.95);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      display: none;
+      z-index: 10;
+      max-width: 80%;
+    }
+    /* 右側：レイヤーパネル */
+    #sidebar {
+      width: 320px;
+      background-color: #252526;
+      border-left: 1px solid #333;
+      display: flex;
+      flex-direction: column;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      background-color: #333333;
+      font-weight: bold;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #layer-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    .layer-item {
+      display: flex;
+      flex-direction: column;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      background-color: #2d2d30;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      font-size: 13px;
+    }
+    .layer-item.selected {
+      border-color: #007acc;
+      background-color: #37373d;
+    }
+    .layer-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .layer-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .layer-controls {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid #3e3e42;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #bbb;
+    }
+    input[type="range"] {
+      flex: 1;
+    }
+    .footer-actions {
+      padding: 12px;
+      border-top: 1px solid #333;
+      display: flex;
+      gap: 8px;
+    }
+    button {
+      flex: 1;
+      padding: 8px 12px;
+      background-color: #0e639c;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover {
+      background-color: #1177bb;
+    }
+    button.secondary {
+      background-color: #3e3e42;
+    }
+    button.secondary:hover {
+      background-color: #4e4e52;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ドラッグ中に画面全体に出る表示 -->
+  <div id="drop-overlay">ここにPSDファイルをドロップしてください</div>
+
+  <div id="canvas-container">
+    <div id="status-banner"></div>
+    
+    <!-- ファイル未選択時の案内メッセージ -->
+    <div id="welcome-message">
+      <h2>PSDファイルを読み込む</h2>
+      <p>この画面のどこにでも、PSDファイルをドラッグ＆ドロップしてください</p>
+      <p style="font-size: 12px; color: #666; margin-top: 15px;">（あるいは下のボタンからファイル選択も可能です）</p>
+      <button class="secondary" style="margin-top: 10px; width: auto; padding: 6px 16px;" onclick="document.getElementById('file-input').click()">ファイルを選ぶ</button>
+      <input type="file" id="file-input" accept=".psd" style="display: none;">
+    </div>
+
+    <canvas id="main-canvas"></canvas>
+  </div>
+
+  <div id="sidebar">
+    <div class="panel-header">
+      <span>レイヤー一覧</span>
+      <span id="doc-size" style="font-weight: normal; font-size: 11px; color: #aaa;"></span>
+    </div>
+    <div id="layer-list">
+      <div style="color: #777; text-align: center; margin-top: 40px; font-size: 13px;">
+        PSDを読み込むとレイヤーが表示されます
+      </div>
+    </div>
+    <div class="footer-actions">
+      <button class="secondary" onclick="location.reload();">リセット</button>
+      <button id="export-btn" disabled>PNG保存</button>
+    </div>
+  </div>
+
+  <script>
+    let psdData = null;
+    let flatLayers = [];
+    let selectedLayerIndex = -1;
+
+    let isDraggingLayer = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let initialLayerLeft = 0;
+    let initialLayerTop = 0;
+
+    const canvas = document.getElementById('main-canvas');
+    const ctx = canvas.getContext('2d');
+    const layerListEl = document.getElementById('layer-list');
+    const exportBtn = document.getElementById('export-btn');
+    const docSizeEl = document.getElementById('doc-size');
+    const statusBanner = document.getElementById('status-banner');
+    const welcomeMessage = document.getElementById('welcome-message');
+    const dropOverlay = document.getElementById('drop-overlay');
+    const fileInput = document.getElementById('file-input');
+
+    function showBanner(msg, isWarning = false) {
+      statusBanner.textContent = msg;
+      statusBanner.style.background = isWarning ? 'rgba(200, 140, 20, 0.95)' : 'rgba(200, 60, 60, 0.95)';
+      statusBanner.style.display = 'block';
+    }
+
+    // --- 画面全体のドラッグ＆ドロップ制御 ---
+    let dragCounter = 0;
+
+    window.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      dropOverlay.style.display = 'flex';
+    });
+
+    window.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dropOverlay.style.display = 'none';
+        dragCounter = 0;
+      }
+    });
+
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault(); // ブラウザが勝手にファイルを開くのを阻止
+    });
+
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      dropOverlay.style.display = 'none';
+
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        loadPsdFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    // ファイル選択ボタンからの読み込み
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) loadPsdFile(e.target.files[0]);
+    });
+
+    // --- PSD読み込みメイン処理 ---
+    async function loadPsdFile(file) {
+      statusBanner.style.display = 'none';
+      try {
+        const buffer = await file.arrayBuffer();
+        psdData = agPsd.readPsd(buffer);
+
+        console.log("PSD読み込み成功:", psdData);
+
+        canvas.width = psdData.width;
+        canvas.height = psdData.height;
+        docSizeEl.textContent = `${psdData.width} × ${psdData.height}px`;
+
+        flatLayers = [];
+        extractLayers(psdData.children || [], 0);
+
+        // レイヤー画像が取れず統合プレビューがある場合のフォールバック
+        if (flatLayers.length === 0 && psdData.canvas) {
+          flatLayers.push({
+            name: '統合済みプレビュー画像',
+            canvas: psdData.canvas,
+            left: 0, top: 0, opacity: 1, visible: true, blendMode: 'source-over', depth: 0
+          });
+          showBanner('個別レイヤーの画像データが見つからないため、統合プレビューを表示しています', true);
+        }
+
+        welcomeMessage.style.display = 'none';
+        canvas.style.display = 'block';
+        exportBtn.disabled = false;
+
+        selectedLayerIndex = flatLayers.length > 0 ? flatLayers.length - 1 : -1;
+        renderLayerUI();
+        renderCanvas();
+
+      } catch (err) {
+        showBanner('PSDの読み込みエラー: ' + err.message);
+        console.error(err);
+      }
+    }
+
+    function extractLayers(children, depth, parentHidden = false) {
+      for (const child of children) {
+        const isHidden = parentHidden || Boolean(child.hidden);
+        if (child.children) {
+          extractLayers(child.children, depth + 1, isHidden);
+        } else if (child.canvas) {
+          flatLayers.push({
+            name: child.name || '名称未設定レイヤー',
+            canvas: child.canvas,
+            left: child.left || 0,
+            top: child.top || 0,
+            opacity: child.opacity !== undefined ? child.opacity : 1,
+            visible: !isHidden,
+            blendMode: mapBlendMode(child.blendMode),
+            depth: depth
+          });
+        }
+      }
+    }
+
+    function mapBlendMode(psdMode) {
+      const map = {
+        'normal': 'source-over',
+        'multiply': 'multiply',
+        'screen': 'screen',
+        'overlay': 'overlay',
+        'darken': 'darken',
+        'lighten': 'lighten',
+        'color dodge': 'color-dodge',
+        'color burn': 'color-burn',
+        'hard light': 'hard-light',
+        'soft light': 'soft-light',
+        'difference': 'difference',
+        'exclusion': 'exclusion'
+      };
+      return map[psdMode] || 'source-over';
+    }
+
+    function renderCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < flatLayers.length; i++) {
+        const layer = flatLayers[i];
+        if (!layer.visible || layer.opacity <= 0) continue;
+
+        ctx.save();
+        ctx.globalAlpha = layer.opacity;
+        ctx.globalCompositeOperation = layer.blendMode;
+        ctx.drawImage(layer.canvas, layer.left, layer.top);
+        ctx.restore();
+      }
+    }
+
+    function renderLayerUI() {
+      layerListEl.innerHTML = '';
+      if (flatLayers.length === 0) {
+        layerListEl.innerHTML = '<div style="color: #888; text-align: center; margin-top: 40px; font-size: 13px;">表示できるレイヤーがありません</div>';
+        return;
+      }
+
+      for (let i = flatLayers.length - 1; i >= 0; i--) {
+        const layer = flatLayers[i];
+        const item = document.createElement('div');
+        item.className = 'layer-item' + (i === selectedLayerIndex ? ' selected' : '');
+
+        const row = document.createElement('div');
+        row.className = 'layer-row';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = layer.visible;
+        checkbox.addEventListener('change', (e) => {
+          layer.visible = e.target.checked;
+          renderCanvas();
+        });
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'layer-name';
+        nameSpan.style.paddingLeft = `${layer.depth * 12}px`;
+        nameSpan.textContent = layer.name;
+        nameSpan.addEventListener('click', () => {
+          selectedLayerIndex = i;
+          renderLayerUI();
+        });
+
+        row.appendChild(checkbox);
+        row.appendChild(nameSpan);
+        item.appendChild(row);
+
+        if (i === selectedLayerIndex) {
+          const controls = document.createElement('div');
+          controls.className = 'layer-controls';
+
+          const label = document.createElement('span');
+          label.textContent = `不透明度: ${Math.round(layer.opacity * 100)}%`;
+
+          const slider = document.createElement('input');
+          slider.type = 'range';
+          slider.min = 0;
+          slider.max = 1;
+          slider.step = 0.01;
+          slider.value = layer.opacity;
+          slider.addEventListener('input', (e) => {
+            layer.opacity = parseFloat(e.target.value);
+            label.textContent = `不透明度: ${Math.round(layer.opacity * 100)}%`;
+            renderCanvas();
+          });
+
+          controls.appendChild(label);
+          controls.appendChild(slider);
+          item.appendChild(controls);
+        }
+
+        layerListEl.appendChild(item);
+      }
+    }
+
+    // キャンバス上のドラッグで選択中レイヤーを移動
+    canvas.addEventListener('mousedown', (e) => {
+      if (selectedLayerIndex < 0) return;
+      isDraggingLayer = true;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      dragStartX = e.clientX * scaleX;
+      dragStartY = e.clientY * scaleY;
+      initialLayerLeft = flatLayers[selectedLayerIndex].left;
+      initialLayerTop = flatLayers[selectedLayerIndex].top;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDraggingLayer || selectedLayerIndex < 0) return;
+      const rectCanvas = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rectCanvas.width;
+      const scaleY = canvas.height / rectCanvas.height;
+      const dx = (e.clientX * scaleX) - dragStartX;
+      const dy = (e.clientY * scaleY) - dragStartY;
+
+      flatLayers[selectedLayerIndex].left = Math.round(initialLayerLeft + dx);
+      flatLayers[selectedLayerIndex].top = Math.round(initialLayerTop + dy);
+      renderCanvas();
+    });
+
+    window.addEventListener('mouseup', () => {
+      isDraggingLayer = false;
+    });
+
+    exportBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'edited-image.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+  </script>
+</body>
+</html>
